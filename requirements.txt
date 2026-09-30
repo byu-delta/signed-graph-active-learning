@@ -1,0 +1,5 @@
+# Runtime dependencies for main.py, plot.py, laplace.py, poisson.py, and data/datasets.py
+numpy>=1.24
+scipy>=1.12,<2
+matplotlib>=3.7
+graphlearning
