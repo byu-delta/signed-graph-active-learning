@@ -153,10 +153,6 @@ class MatrixFreeLaplacian(splinalg.LinearOperator):
         return self._matvec(vector)
 
 
-
-
-
-
 class Graph:
     def __init__(self, weight_mat, y):
         self.y = np.asarray(y).squeeze()
@@ -337,12 +333,17 @@ class Graph:
 
     def AddEdges(self, iter_samples, rng, add_edges_per_node=3):
         """
-        For each recently sampled node, add edges to previously labeled nodes.
+        For each newly sampled node, add edges between it and previously labeled nodes.
 
-        Each new node gets up to ``add_edges_per_node`` positive edges and
-        negative edges. The default budget is three edges for each sign; zero
-        disables edge additions.
+        Parameters:
+        - iter_samples: array-like of int
+            The indices of the newly sampled nodes.
+        - rng: np.random.Generator
+            A random number generator for reproducibility.
+        - add_edges_per_node: int, optional (default=3)
+            The number of positive and negative edges to add for each newly sampled node.
         """
+
         if not isinstance(add_edges_per_node, (int, np.integer)):
             raise TypeError("add_edges_per_node must be a nonnegative integer")
         if add_edges_per_node < 0:
@@ -352,21 +353,18 @@ class Graph:
 
         iter_samples = np.asarray(iter_samples, dtype=int).ravel()
 
+        # Reconstruct the set of labeled nodes in the previous iteration
         previous_mask = self.labeled_mask.copy()
         previous_mask[iter_samples] = False
         previous_label_idx = np.flatnonzero(previous_mask)
         previous_labels = self.y[previous_label_idx]
 
-        # Build all update (row, col, val) triples as NumPy arrays
         row_parts, col_parts, val_parts = [], [], []
 
         for node in iter_samples:
             node_label = self.y[node]
-
-            
             existing_neighbors = self.W.indices[
-                # Each node corresponds to a row in the CSR matrix
-                # So this gives the starting and ending indices of the neighbors for this node
+                # Find the columns for the nonzero entries in the row corresponding to the current node
                 self.W.indptr[node] : self.W.indptr[node + 1]
             ]
 
@@ -414,7 +412,6 @@ class Graph:
             shape=self.W.shape,
         )
         self.W = (self.W + update).tocsr()
-
         self.negative_nnz += int(np.count_nonzero(update_vals < 0))
 
     def csr_data_positions(self, matrix, rows, cols):
@@ -445,28 +442,33 @@ class Graph:
         return positions
 
     def NegateEdges(self, recently_labeled_nodes):
-        """Negate cross-class edges incident to recently labeled vertices."""
         labeled_idx = np.flatnonzero(self.labeled_mask)
         observed_labels = self.y[labeled_idx]
         recently_labeled_idx = np.asarray(recently_labeled_nodes, dtype=int).ravel()
 
+        # Get the submatrix of W corresponding to edges between recently labeled nodes and previously labeled nodes
+        # tocoo() has (row, col, data) instead of (indptr, indices, data)
         K_labeled = self.W[recently_labeled_idx][:, labeled_idx].tocoo()
         k_rows = K_labeled.row
         k_cols = K_labeled.col
         k_weights = K_labeled.data
         recently_labeled_labels = self.y[recently_labeled_idx]
-
-        # contains the original graph node index corresponding to the row of each stored COO entry
+        
+        # Contains the original row node ID for every nonzero edge found in K_labeled
         u_all = recently_labeled_idx[k_rows]
         # Same as above, but for columns
         v_all = labeled_idx[k_cols]
 
         recently_labeled_mask = np.zeros(self.W.shape[0], dtype=bool)
         recently_labeled_mask[recently_labeled_idx] = True
+
+        # If v_all is an older node keep the edge
+        # Or if u_all is a newer node, keep the edge when u < v
         handle_once = (~recently_labeled_mask[v_all]) | (u_all < v_all)
         mask = (
             handle_once
             & (k_weights > 0)
+            # Ignore self edgees
             & (recently_labeled_labels[k_rows] != observed_labels[k_cols])
         )
         u = u_all[mask]
